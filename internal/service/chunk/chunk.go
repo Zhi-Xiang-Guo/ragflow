@@ -1077,8 +1077,13 @@ func (s *ChunkService) SwitchChunks(ctx context.Context, userID, datasetID, docu
 		return fmt.Errorf("document does not belong to this dataset")
 	}
 
+	indexName := fmt.Sprintf("ragflow_%s", targetTenantID)
+	if availableInt == 0 {
+		if err := s.invalidateParentContexts(ctx, indexName, datasetID, documentID, chunkIDs); err != nil {
+			return err
+		}
+	}
 	for _, cid := range chunkIDs {
-		indexName := fmt.Sprintf("ragflow_%s", targetTenantID)
 
 		if err = s.docEngine.UpdateChunks(ctx, map[string]interface{}{
 			"id":     cid,
@@ -1249,6 +1254,12 @@ func (s *ChunkService) UpdateChunk(ctx context.Context, req *service.UpdateChunk
 		"doc_id": req.DocumentID,
 	}
 
+	contentChanged := req.Content != nil && existing["content_with_weight"] != *req.Content
+	if contentChanged || (req.Available != nil && !*req.Available) {
+		if err := s.invalidateParentContexts(ctx, indexName, req.DatasetID, req.DocumentID, []string{req.ChunkID}); err != nil {
+			return err
+		}
+	}
 	err = s.docEngine.UpdateChunks(ctx, condition, d, indexName, req.DatasetID)
 	if err != nil {
 		return fmt.Errorf("failed to update chunk: %w", err)
@@ -1318,6 +1329,11 @@ func (s *ChunkService) RemoveChunks(ctx context.Context, req *service.RemoveChun
 		return 0, nil
 	}
 
+	if !req.DeleteAll {
+		if err := s.invalidateParentContexts(ctx, indexName, doc.KbID, req.DocID, req.ChunkIDs); err != nil {
+			return 0, err
+		}
+	}
 	deletedCount, err := s.docEngine.DeleteChunks(ctx, condition, indexName, doc.KbID)
 	if err != nil {
 		return 0, fmt.Errorf("failed to delete chunks: %w", err)
